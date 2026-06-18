@@ -1,0 +1,31 @@
+# Data (downloaded by students)
+data/
+*.zip
+*.tar.gz
+
+# Checkpoints / outputs
+checkpoints/
+runs/
+wandb/
+*.pth
+*.pt
+*.ckpt
+
+# Submissions
+submission/*.csv
+!submission/sample_submission.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.pytest_cache/
+.venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
