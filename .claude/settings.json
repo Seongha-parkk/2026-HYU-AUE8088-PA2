@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(grep -n \"NotImplementedError\\\\|raise\\\\|TODO\\\\|pass$\" src/models/vit.py)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
