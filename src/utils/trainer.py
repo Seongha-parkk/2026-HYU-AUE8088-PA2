@@ -43,6 +43,7 @@ class MultiTaskTrainer:
         device: torch.device,
         config: TrainConfig,
         logger: WandbLogger | None = None,
+        uw: nn.Module | None = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -51,6 +52,7 @@ class MultiTaskTrainer:
         self.device = device
         self.cfg = config
         self.scaler = torch.amp.GradScaler(enabled=config.amp)
+        self.uw = uw  # UncertaintyWeighting 모듈 (None 이면 고정 loss_weights 사용)
         # No-op logger by default — calls are silently ignored.
         self.logger = logger if logger is not None else WandbLogger(project=None)
 
@@ -83,6 +85,9 @@ class MultiTaskTrainer:
             }
             for a, v in val_metrics["per_macro_f1"].items():
                 log_payload[f"val/mf1_{a}"] = v
+            if self.uw is not None:
+                for a, s in self.uw.sigmas().items():
+                    log_payload[f"uw/sigma_{a}"] = s
             self.logger.log(log_payload, step=epoch)
 
         return history
@@ -100,10 +105,14 @@ class MultiTaskTrainer:
             self.optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast(device_type="cuda", enabled=self.cfg.amp):
                 logits = self.model(x)
-                loss = sum(
-                    self.cfg.loss_weights[a] * self.loss_fns[a](logits[a], y[a])
-                    for a in ATTRIBUTES
-                )
+                if self.uw is not None:
+                    per_loss = {a: self.loss_fns[a](logits[a], y[a]) for a in ATTRIBUTES}
+                    loss = self.uw(per_loss)
+                else:
+                    loss = sum(
+                        self.cfg.loss_weights[a] * self.loss_fns[a](logits[a], y[a])
+                        for a in ATTRIBUTES
+                    )
 
             self.scaler.scale(loss).backward()
             if self.cfg.grad_clip is not None:

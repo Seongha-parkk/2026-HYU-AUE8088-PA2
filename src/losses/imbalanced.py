@@ -87,3 +87,32 @@ def weighted_cross_entropy(samples_per_class: torch.Tensor) -> nn.CrossEntropyLo
     weights = 1.0 / samples_per_class.float().clamp(min=1)
     weights = weights / weights.sum() * len(samples_per_class)
     return nn.CrossEntropyLoss(weight=weights)
+
+
+class UncertaintyWeighting(nn.Module):
+    """Homoscedastic uncertainty weighting (Kendall et al., CVPR 2018).
+
+    Multi-task loss:
+        L = Σ_i  exp(-2·log_σ_i) · L_i  +  log_σ_i
+
+    log_σ_i 는 학습 가능한 파라미터. σ_i 가 클수록 해당 task 의 불확실성이
+    높다는 의미이며, 가중치 exp(-2·log_σ_i) 는 자동으로 줄어든다.
+
+    Reference: https://arxiv.org/abs/1705.07115
+    """
+
+    def __init__(self, tasks: list[str]) -> None:
+        super().__init__()
+        self.log_sigma = nn.ParameterDict({
+            t: nn.Parameter(torch.zeros(1)) for t in tasks
+        })
+
+    def forward(self, per_task_losses: dict[str, torch.Tensor]) -> torch.Tensor:
+        return sum(
+            torch.exp(-2.0 * self.log_sigma[t]) * loss + self.log_sigma[t]
+            for t, loss in per_task_losses.items()
+        )
+
+    def sigmas(self) -> dict[str, float]:
+        """현재 학습된 σ 값 반환 (리포트/wandb 로깅용)."""
+        return {t: torch.exp(self.log_sigma[t]).item() for t in self.log_sigma}
