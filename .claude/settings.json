@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3 -c ' *)",
       "Bash(grep -n \"NotImplementedError\\\\|raise\\\\|TODO\\\\|pass$\" src/models/vit.py)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(grep -n 'NotImplementedError\\\\|raise NotImplemented\\\\|TODO\\\\|pass$' src/datasets/samplers.py src/augment/mix.py src/utils/metrics.py)"
     ]
   }
 }
