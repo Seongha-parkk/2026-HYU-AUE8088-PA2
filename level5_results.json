@@ -1,0 +1,10 @@
+{
+  "ir-rarity+uncertainty_K250": 0.6467,
+  "ir-rarity+uncertainty_K500": 0.6597,
+  "random_K1000": 0.6546,
+  "ir-rarity+uncertainty_K1000": 0.658,
+  "pure-uncertainty_K1000": 0.665,
+  "high-loss-pure-ce_K1000": 0.6439,
+  "feature-diversity_K1000": 0.6739,
+  "minority-error_K1000": 0.645
+}
