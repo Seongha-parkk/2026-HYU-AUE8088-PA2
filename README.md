@@ -360,7 +360,213 @@ import os; os.environ[\"WANDB_DISABLED\"] = \"true\"
 
 ---
 
-## 10. 저장소 구조 (Repository Structure)
+## 10. 학습 설정 (Training Configuration)
+
+### 10.1 랜덤 시드 (Random Seed)
+
+모든 노트북에서 `SEED = 42` 로 통일하여 실험 재현성을 보장합니다. 각 노트북의 `setup` 셀에서 선언됩니다.
+
+```python
+SEED = 42   # 전체 실험 고정 시드
+set_seed(SEED, deterministic=True)
+```
+
+`src/utils/seed.py` 의 `set_seed` 함수는 다음을 모두 고정합니다.
+
+| 대상 | 처리 방식 |
+|---|---|
+| Python 표준 `random` | `random.seed(SEED)` |
+| NumPy | `np.random.seed(SEED)` |
+| PyTorch CPU | `torch.manual_seed(SEED)` |
+| PyTorch CUDA | `torch.cuda.manual_seed_all(SEED)` |
+| cuDNN 결정론적 연산 | `torch.backends.cudnn.deterministic = True` |
+| cuDNN autotuner 비활성화 | `torch.backends.cudnn.benchmark = False` |
+
+DataLoader 의 worker 시드는 `seed_worker` 함수를 `worker_init_fn` 으로 전달하여 추가 고정합니다.
+
+```python
+g = torch.Generator()
+g.manual_seed(SEED)
+DataLoader(..., worker_init_fn=seed_worker, generator=g)
+```
+
+> 동일 시드·동일 환경에서 Avg Macro-F1 이 ±1.0 이내로 재현되면 재현 성공으로 간주합니다 (§6.1).
+
+---
+
+### 10.2 레벨별 학습 하이퍼파라미터
+
+#### Level 1 — Classic CNNs (VGG-16, ResNet-18/50)
+
+| 파라미터 | 값 |
+|---|---|
+| Optimizer | AdamW |
+| Learning Rate | 3e-4 |
+| Weight Decay | 5e-4 |
+| LR Scheduler | CosineAnnealingLR (T_max = epochs) |
+| Epochs | 30 |
+| Batch Size | 64 |
+| Loss | CrossEntropyLoss (각 속성 균등 가중합) |
+| Sampler | shuffle (불균형 보정 없음) |
+| Augmentation | `train_transform()` — RandomResizedCrop(224) + RandomHFlip + Normalize |
+| Gradient Clip | 없음 |
+
+- UncertaintyWeighting 실험: `log_σ` 파라미터를 AdamW 에 함께 포함하여 학습.
+
+---
+
+#### Level 2 — Vision Transformers (ViT-S/16, Swin-Tiny)
+
+| 파라미터 | 값 |
+|---|---|
+| Optimizer | AdamW |
+| Learning Rate | 3e-4 |
+| Weight Decay | 5e-4 |
+| LR Scheduler | CosineAnnealingLR (T_max = 30) |
+| Epochs | 30 |
+| Batch Size | 64 |
+| Loss | CrossEntropyLoss |
+| Sampler | shuffle |
+| Augmentation | Level 1 과 동일 |
+| Gradient Clip | 없음 |
+
+- **DeiT-S/16 사전학습 가중치** (선택): `https://dl.fbaipublicfiles.com/deit/deit_small_patch16_224-cd65a155.pth`
+- **Swin-Tiny 사전학습 가중치** (선택): `https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth`
+- 두 가중치 모두 노트북 내 `wget` 스크립트로 자동 다운로드됩니다. `USE_PRETRAINED = False` (기본값) 로 두면 스크래치 학습.
+
+---
+
+#### Level 3 — Imbalance & Advanced Augmentation
+
+| 파라미터 | 값 |
+|---|---|
+| Optimizer | AdamW |
+| Learning Rate | 5e-4 |
+| Weight Decay | 5e-2 |
+| LR Scheduler | CosineAnnealingLR (T_max = 30) |
+| Epochs | 30 |
+| Batch Size | 64 |
+| Loss | **FocalLoss** (속성별 γ 자동 계산) |
+| Sampler | **IR-weighted WeightedRandomSampler** (3속성 통합) |
+| Augmentation | RandAugment (n=2, m=9) + ColorJitter + **CutMix (α=1.0)** |
+| Gradient Clip | norm = 1.0 |
+
+**FocalLoss γ 자동 계산 공식**:
+
+```
+IR_a  = max_count_a / min_count_a   (속성 a 의 Imbalance Ratio)
+γ_a   = round(1 + ln(IR_a), 1)
+
+Set A 기준: weather IR ≈ 15.5 → γ = 3.7
+            scene   IR ≈  5.4 → γ = 2.7
+            timeofday IR ≈ 6.3 → γ = 2.8
+```
+
+**IR-weighted Sampler 가중치**:
+
+```
+w_i = Σ_a  (IR_a / ΣIR) × (1 / count(label_a[i]))
+```
+
+각 샘플 가중치는 3개 속성 모두의 희귀도를 IR 비례로 통합하여 계산합니다.
+
+**CutMix + IR-weighted Loss**:
+
+```python
+x_mix, ya, yb, lam = cutmix_data(images, targets, alpha=1.0)
+loss = Σ_a  (IR_a / ΣIR) × [lam × FocalLoss(logit_a, ya_a)
+                             + (1-lam) × FocalLoss(logit_a, yb_a)]
+```
+
+**학습 대상 실험 목록**:
+
+| 실험명 | 체크포인트 파일 |
+|---|---|
+| Full strategy (FocalLoss + IR sampler + RandAug + CutMix) | `level3_ir-focal+ir-sampler+randaug+cutmix.pth` |
+| Ablation B: IR sampler only | `level3_ir-sampler-only.pth` |
+| Ablation C: CutMix only | `level3_cutmix-only.pth` |
+| Pretrained ViT + Full strategy (Level 5 베이스) | `level3_vit-pretrained+ir-focal+ir-sampler+randaug+cutmix.pth` |
+
+---
+
+#### Level 4 — XAI & Efficiency
+
+학습 없음. Level 1~3 에서 저장된 체크포인트를 로드하여 평가·분석만 수행합니다.
+
+| 사용 체크포인트 | 용도 |
+|---|---|
+| `level1_vgg16_uw.pth` | Pareto plot (VGG-16 + UW) |
+| `level1_resnet18_uw.pth` | Pareto plot (ResNet-18 + UW) |
+| `level1_resnet50_uw.pth` | Pareto plot (ResNet-50 + UW) |
+| `level2_swin_tiny.pth` | Pareto plot (Swin-Tiny) |
+| `level3_ir-focal+ir-sampler+randaug+cutmix.pth` | Best 모델 Grad-CAM + Confusion Matrix |
+
+---
+
+#### Level 5 — Data Mining (전략 재학습)
+
+Level 3 best 체크포인트(`level3_vit-pretrained+...pth`)에서 파인튜닝합니다.
+
+| 파라미터 | 값 |
+|---|---|
+| 초기화 | `level3_vit-pretrained+ir-focal+ir-sampler+randaug+cutmix.pth` |
+| Optimizer | AdamW |
+| Learning Rate | **1e-4** (Level 3 대비 1/5 — 이미 수렴된 모델) |
+| Weight Decay | 5e-2 |
+| LR Scheduler | CosineAnnealingLR (T_max = 30) |
+| Epochs | 30 |
+| Batch Size | 64 |
+| Loss | FocalLoss (IR 재계산 — Set A + picks 합산 기준) |
+| Sampler | IR-weighted WeightedRandomSampler (재계산) |
+| Augmentation | RandAugment (n=2, m=9) + ColorJitter + CutMix (α=1.0) |
+| Gradient Clip | norm = 1.0 |
+
+**학습 데이터**: Set A train (5,000장) + 선별된 K장 (기본 K=1,000).
+
+IR과 FocalLoss γ는 merged dataset 기준으로 자동 재계산되므로, picks 분포에 따라 각 속성의 γ가 자동 조정됩니다.
+
+**선별 전략별 기록된 결과** (`SEED=42`, 30 epochs):
+
+| 전략 | Avg-MF1 | DI Score |
+|---|---|---|
+| Random baseline (K=1000) | 0.6546 | 0.00% |
+| IR-rarity + Uncertainty (Strategy A) | 0.6580 | +0.52% |
+| Pure Uncertainty | 0.6650 | +1.60% |
+| **Feature Diversity** *(best)* | **0.6739** | **+2.94%** |
+| High-Loss (pure CE) | 0.6439 | −1.64% |
+| Minority-Error | 0.6450 | −1.46% |
+
+**Strategy A 절제 실험 (K 크기별)**:
+
+| K | Avg-MF1 |
+|---|---|
+| 250 | 0.6467 |
+| 500 | 0.6597 |
+| 1000 | 0.6580 |
+
+---
+
+### 10.3 평가 단계만 재현하기 (SKIP_TRAINING)
+
+학습 시간이 1시간을 초과하는 Level 1·2·3·5 노트북에는 `SKIP_TRAINING` 플래그가 있습니다. `True` 로 설정하면 학습을 건너뛰고 Drive 에 저장된 체크포인트를 직접 로드합니다.
+
+```python
+# 각 노트북의 setup 셀에서
+SKIP_TRAINING = True   # 평가 단계만 재현
+```
+
+| Level | 체크포인트 위치 | 예상 학습 시간 (T4) |
+|---|---|---|
+| Level 1 | `/drive/MyDrive/aue8088-pa2/checkpoints/level1_*.pth` | ~3시간 (6개 모델) |
+| Level 2 | `/drive/MyDrive/aue8088-pa2/checkpoints/level2_*.pth` | ~1시간 (2개 모델) |
+| Level 3 | `/drive/MyDrive/aue8088-pa2/checkpoints/level3_*.pth` | ~2시간 (4개 실험) |
+| Level 5 | `/drive/MyDrive/aue8088-pa2/checkpoints/level5_final.pth` | ~5시간 (6개 전략) |
+
+> 체크포인트가 Drive 에 없으면 `FileNotFoundError` 가 발생하며 경로를 안내합니다.
+
+---
+
+## 11. 저장소 구조 (Repository Structure)
 
 ```
 2026-aue8088-pa2/
@@ -401,7 +607,7 @@ import os; os.environ[\"WANDB_DISABLED\"] = \"true\"
 
 ---
 
-## 11. 시작하기 (Quick Start)
+## 12. 시작하기 (Quick Start)
 
 ```bash
 # 1. 저장소 클론
@@ -427,7 +633,7 @@ jupyter notebook notebooks/level1_classic_cnns.ipynb
 
 ---
 
-## 12. 자주 묻는 질문 (FAQ)
+## 13. 자주 묻는 질문 (FAQ)
 
 **Q1. Pretrained weight를 써도 되나요?**
 A. ImageNet **pretrained 가중치 텐서(`.pth`/`.bin`)** 는 모든 Level에서 허용됩니다. 다만 모델 라이브러리(`torchvision.models`, `timm` 등)를 import해서 모델 객체째로 가져오는 것은 금지입니다 — 본인이 구현한 모델의 `state_dict` 키에 맞춰 외부 가중치를 **로드(map)** 하는 형태로 사용하세요. 사용 시 출처(예: `timm` 에서 export한 어느 체크포인트)를 노트북과 리포트에 명시해 주세요. BDD100K 자체로 pretrain된 가중치는 사용 금지입니다.
@@ -455,7 +661,7 @@ A. 자유입니다. 사용 시 리포트에 학습 곡선 스크린샷이나 공
 
 ---
 
-## 13. 참고 자료 (References)
+## 14. 참고 자료 (References)
 
 - **Dataset**: Yu et al., *"BDD100K: A Diverse Driving Dataset for Heterogeneous Multitask Learning"*, CVPR 2020.
 - **Backbones**:
@@ -478,7 +684,7 @@ A. 자유입니다. 사용 시 리포트에 학습 곡선 스크린샷이나 공
 
 ---
 
-## 14. 문의 (Contact)
+## 15. 문의 (Contact)
 
 - **수업 관련**: LMS 공지 게시판
 - **과제/스켈레톤 코드 버그**: 본 저장소의 [Issues](../../issues) 에 등록

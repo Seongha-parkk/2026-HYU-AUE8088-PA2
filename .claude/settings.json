@@ -5,7 +5,11 @@
       "Bash(grep -n \"NotImplementedError\\\\|raise\\\\|TODO\\\\|pass$\" src/models/vit.py)",
       "Bash(git commit -m ' *)",
       "Bash(grep -n 'NotImplementedError\\\\|raise NotImplemented\\\\|TODO\\\\|pass$' src/datasets/samplers.py src/augment/mix.py src/utils/metrics.py)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(python3 -)",
+      "Bash(git checkout *)",
+      "Bash(xargs cat -n)",
+      "Bash(python -c ' *)"
     ]
   }
 }
