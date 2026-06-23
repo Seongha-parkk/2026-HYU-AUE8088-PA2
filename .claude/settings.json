@@ -10,7 +10,10 @@
       "Bash(git checkout *)",
       "Bash(xargs cat -n)",
       "Bash(python -c ' *)",
-      "Bash(python3)"
+      "Bash(python3)",
+      "Bash(python3 /private/tmp/claude-501/-Users-qkrtjdgk-Desktop-python-2026-HYU-AUE8088-PA2-main/9aca056f-9e9f-486b-9841-9a7d66c93b3e/scratchpad/clean_notebooks.py)",
+      "Bash(python3 /private/tmp/claude-501/-Users-qkrtjdgk-Desktop-python-2026-HYU-AUE8088-PA2-main/9aca056f-9e9f-486b-9841-9a7d66c93b3e/scratchpad/clean_pass2.py)",
+      "Bash(python3 /private/tmp/claude-501/-Users-qkrtjdgk-Desktop-python-2026-HYU-AUE8088-PA2-main/9aca056f-9e9f-486b-9841-9a7d66c93b3e/scratchpad/clean_pass3.py)"
     ]
   }
 }
